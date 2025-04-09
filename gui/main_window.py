@@ -4,7 +4,8 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTextEdit, QLineEdit, QLabel, QStatusBar,
     QGroupBox, QFormLayout, QListWidget, QListWidgetItem,
-    QMenuBar, QMessageBox, QInputDialog, QDialog, QDialogButtonBox
+    QMenuBar, QMessageBox, QInputDialog, QDialog, QDialogButtonBox,
+    QComboBox
 )
 from PySide6.QtGui import QAction, QColor
 from PySide6.QtCore import Qt, Signal, QObject, QThread
@@ -110,7 +111,14 @@ class MainWindow(QMainWindow):
                  return
 
             self.sequencer = TestSequencer(self.device)
-            # Attempt initial connection or check status
+
+            # Initialize Supabase Client
+            self.supabase_client = get_supabase_client()
+            # Load operators *after* client is initialized
+            if self.supabase_client:
+                self._load_operator_names()
+
+            # Check connection *after* UI elements potentially reliant on Supabase are ready
             self.check_connection()
 
         except V7xDeviceError as e:
@@ -155,8 +163,10 @@ class MainWindow(QMainWindow):
 
         # --- Test Context Group --- #
         self.dut_serial_input = QLineEdit()
-        self.operator_name_input = QLineEdit()
-        self.sequence_name_input = QLineEdit() # Added for sequence name
+        self.operator_name_combo = QComboBox()
+        self.operator_name_combo.setEditable(True) # Allow adding new names temporarily?
+        self.operator_name_combo.setPlaceholderText("Select or type Operator")
+        self.sequence_name_input = QLineEdit()
 
     def _create_layout(self):
         central_widget = QWidget()
@@ -175,7 +185,7 @@ class MainWindow(QMainWindow):
         context_group = QGroupBox("Test Context")
         context_layout = QFormLayout()
         context_layout.addRow("DUT Serial Number:", self.dut_serial_input)
-        context_layout.addRow("Operator Name:", self.operator_name_input)
+        context_layout.addRow("Operator Name:", self.operator_name_combo)
         context_layout.addRow("Sequence Name:", self.sequence_name_input)
         context_group.setLayout(context_layout)
 
@@ -560,8 +570,8 @@ class MainWindow(QMainWindow):
     def log_to_supabase(self, results):
         self.log_message("Attempting to log results to Supabase...")
         dut_serial = self.dut_serial_input.text().strip() or None
-        operator_name = self.operator_name_input.text().strip() or None
-        # Use the stored sequence ID from the sequencer
+        # Get selected operator name from ComboBox
+        operator_name = self.operator_name_combo.currentText().strip() or None
         sequence_id = self.sequencer.current_sequence_id
 
         if sequence_id is None:
@@ -570,8 +580,6 @@ class MainWindow(QMainWindow):
 
         overall_status_code = results.get('overall', '?')
         overall_result_text = 'PASS' if overall_status_code == '0' else 'FAIL'
-        # Could add more logic for ABORTED/UNKNOWN if needed
-
         records_to_insert = []
         for step_res in results.get('steps', []):
             step_num = step_res.get('step_number', 0)
@@ -581,10 +589,9 @@ class MainWindow(QMainWindow):
             test_type = step_config.get('type', 'UNKNOWN')
 
             record = {
-                "sequence_id": sequence_id, # <---- Use sequence_id here
+                "sequence_id": sequence_id,
                 "dut_serial_number": dut_serial,
                 "operator_name": operator_name,
-                # "sequence_number": None, # Removed - Column doesn't exist in the table
                 "overall_result": overall_result_text,
                 "step_number": step_num,
                 "test_step_type": test_type,
@@ -805,6 +812,31 @@ class MainWindow(QMainWindow):
             print("Closing device connection on exit...")
             self.device.close()
         event.accept() # Allow window to close
+
+    def _load_operator_names(self):
+        """Fetch user names from the Supabase users table and populate the combo box."""
+        if not self.supabase_client:
+            self.log_message("Supabase not configured, cannot load operator names.")
+            return
+
+        self.log_message("Loading operator names from Supabase...")
+        try:
+            response = self.supabase_client.table("users").select("user").execute()
+            if response.data:
+                self.operator_name_combo.clear()
+                operators = sorted([item['user'] for item in response.data if item.get('user')])
+                self.operator_name_combo.addItems(operators)
+                self.log_message(f"Loaded {len(operators)} operator names.")
+                if operators: # Select the first one by default if list is not empty
+                     self.operator_name_combo.setCurrentIndex(0)
+            else:
+                self.log_message(f"Could not fetch operator names: {response.error}")
+                self.operator_name_combo.clear()
+                self.operator_name_combo.setPlaceholderText("Failed to load operators")
+        except Exception as e:
+            self.log_message(f"Error loading operators from Supabase: {e}")
+            self.show_error("Supabase Error", f"Could not load operator names: {e}")
+            self.operator_name_combo.setPlaceholderText("Error loading operators")
 
 if __name__ == '__main__':
     # This check is important for multiprocessing/QThread safety on some platforms
