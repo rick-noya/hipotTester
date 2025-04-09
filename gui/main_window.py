@@ -150,6 +150,10 @@ class MainWindow(QMainWindow):
         self.clear_sequence_button = QPushButton("Clear Sequence")
         self.run_test_button = QPushButton("Run Test Sequence")
         self.run_test_button.setStyleSheet("background-color: lightgreen")
+        # Add widget for step details
+        self.step_details_output = QTextEdit()
+        self.step_details_output.setReadOnly(True)
+        self.step_details_output.setPlaceholderText("Select a step on the left to see details.")
 
         # Test Results
         self.results_output = QTextEdit()
@@ -203,30 +207,43 @@ class MainWindow(QMainWindow):
         cmd_layout.addWidget(self.clear_log_button, alignment=Qt.AlignRight)
         cmd_group.setLayout(cmd_layout)
 
-        # --- Test Sequence Group --- #
+        # --- Test Sequence Group --- # Updated Layout
         seq_group = QGroupBox("Test Sequence")
-        seq_layout = QVBoxLayout()
-        seq_layout.addWidget(QLabel("Configured Steps:"))
-        seq_layout.addWidget(self.sequence_list_widget)
-        seq_buttons_layout = QHBoxLayout()
-        seq_buttons_layout.addWidget(self.add_step_button)
-        seq_buttons_layout.addWidget(self.clear_sequence_button)
-        seq_buttons_layout.addStretch()
-        seq_buttons_layout.addWidget(self.run_test_button)
-        seq_layout.addLayout(seq_buttons_layout)
-        seq_group.setLayout(seq_layout)
+        seq_main_layout = QHBoxLayout() # Main layout is now horizontal
+
+        # Left Column (List and Buttons)
+        left_v_layout = QVBoxLayout()
+        left_v_layout.addWidget(QLabel("Configured Steps:"))
+        left_v_layout.addWidget(self.sequence_list_widget)
+        # Buttons associated with the list
+        seq_list_buttons_layout = QHBoxLayout()
+        seq_list_buttons_layout.addWidget(self.add_step_button)
+        seq_list_buttons_layout.addWidget(self.clear_sequence_button)
+        seq_list_buttons_layout.addStretch()
+        left_v_layout.addLayout(seq_list_buttons_layout)
+
+        # Right Column (Details and Run Button)
+        right_v_layout = QVBoxLayout()
+        right_v_layout.addWidget(QLabel("Step Details:"))
+        right_v_layout.addWidget(self.step_details_output)
+        # Run button associated with the whole sequence
+        right_v_layout.addWidget(self.run_test_button, alignment=Qt.AlignRight)
+
+        # Add columns to the main horizontal layout
+        seq_main_layout.addLayout(left_v_layout, 1) # Give list column stretch factor 1
+        seq_main_layout.addLayout(right_v_layout, 1) # Give details column stretch factor 1
+
+        seq_group.setLayout(seq_main_layout)
+        main_layout.addWidget(conn_group)
+        main_layout.addWidget(context_group)
+        main_layout.addWidget(cmd_group)
+        main_layout.addWidget(seq_group)
 
         # --- Test Results Group --- #
         res_group = QGroupBox("Test Results")
         res_layout = QVBoxLayout()
         res_layout.addWidget(self.results_output)
         res_group.setLayout(res_layout)
-
-        # Add groups to main layout
-        main_layout.addWidget(conn_group)
-        main_layout.addWidget(context_group)
-        main_layout.addWidget(cmd_group)
-        main_layout.addWidget(seq_group)
         main_layout.addWidget(res_group)
 
         self.setCentralWidget(central_widget)
@@ -281,6 +298,8 @@ class MainWindow(QMainWindow):
         self.run_test_button.clicked.connect(self.run_test)
         # Connect the assemblage input field signal
         self.assemblage_input.editingFinished.connect(self.handle_assemblage_scan)
+        # Connect sequence list selection change
+        self.sequence_list_widget.currentItemChanged.connect(self.display_step_details)
 
     # --- Device Connection --- #
 
@@ -894,6 +913,44 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.log_message(f"Error querying Supabase for Assemblage ID: {e}")
             self.show_error("Supabase Error", f"Could not verify Assemblage ID: {e}")
+
+    # --- Display Step Details --- #
+    @Slot(QListWidgetItem, QListWidgetItem)
+    def display_step_details(self, current_item, previous_item):
+        """Displays the parameters of the selected step in the details view."""
+        self.step_details_output.clear()
+        if not current_item or not self.sequencer:
+            return
+
+        # Get the index stored in the item
+        step_index = current_item.data(Qt.UserRole)
+        if step_index is None or step_index >= len(self.sequencer.sequence):
+            self.step_details_output.setText("Error: Could not retrieve step data.")
+            return
+
+        step_config = self.sequencer.sequence[step_index]
+
+        # Format and display the details
+        details_text = f"<b>Step {step_index + 1}: {step_config.get('type', 'Unknown')}</b><br>"
+        if step_config.get('step_name'):
+            details_text += f"Name: {step_config['step_name']}<br>"
+        details_text += "<br><b>Parameters:</b><br>"
+
+        # Display parameters nicely
+        for key, value in step_config.items():
+            if key not in ['type', 'step_name']: # Skip keys already displayed
+                 # Simple formatting, could improve (e.g., units)
+                 key_display = key.replace('_', ' ').title()
+                 value_display = str(value)
+                 # Handle boolean for checkbox params
+                 if isinstance(value, bool):
+                     value_display = "Yes" if value else "No"
+                 # Handle empty strings
+                 if value_display == "":
+                     value_display = "<i>(Not set)</i>"
+                 details_text += f"&nbsp;&nbsp;{key_display:<18}: {value_display}<br>"
+
+        self.step_details_output.setText(details_text)
 
 if __name__ == '__main__':
     # This check is important for multiprocessing/QThread safety on some platforms
