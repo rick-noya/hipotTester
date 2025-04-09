@@ -561,7 +561,12 @@ class MainWindow(QMainWindow):
         self.log_message("Attempting to log results to Supabase...")
         dut_serial = self.dut_serial_input.text().strip() or None
         operator_name = self.operator_name_input.text().strip() or None
-        sequence_name = self.sequence_name_input.text().strip() or None # Get sequence name
+        # Use the stored sequence ID from the sequencer
+        sequence_id = self.sequencer.current_sequence_id
+
+        if sequence_id is None:
+            self.log_message("Warning: No sequence ID available (sequence not saved/loaded?). Skipping Supabase log.")
+            return
 
         overall_status_code = results.get('overall', '?')
         overall_result_text = 'PASS' if overall_status_code == '0' else 'FAIL'
@@ -576,10 +581,10 @@ class MainWindow(QMainWindow):
             test_type = step_config.get('type', 'UNKNOWN')
 
             record = {
+                "sequence_id": sequence_id, # <---- Use sequence_id here
                 "dut_serial_number": dut_serial,
                 "operator_name": operator_name,
-                "sequence_name": sequence_name,
-                "sequence_number": None, # You might want to track this separately
+                # "sequence_number": None, # Removed - Column doesn't exist in the table
                 "overall_result": overall_result_text,
                 "step_number": step_num,
                 "test_step_type": test_type,
@@ -590,11 +595,11 @@ class MainWindow(QMainWindow):
                 "status_description": None,
                 "test_level": None,
                 "test_level_unit": None,
-                "breakdown_current_peak": None, # Needs mapping from STEPRSLT
+                "breakdown_current_peak": None,
                 "measurement_result": None,
                 "measurement_unit": None,
-                "arc_current_peak": None, # Needs mapping from STEPRSLT
-                "notes": f"Raw: {raw_result}" # Store raw result in notes for now
+                "arc_current_peak": None,
+                "notes": f"Raw: {raw_result}"
             }
 
             if parsed:
@@ -633,13 +638,10 @@ class MainWindow(QMainWindow):
                          record["measurement_unit"] = 'Ohms'
 
                     # Map optional fields (assuming common positions)
-                    # Field 5 might be breakdown_current_peak
-                    # Field 7 might be arc_current_peak (often only ACW/DCW)
                     if 'optional1' in parsed:
                         if test_type in ["ACW", "DCW"]:
                             arc_str = parsed['optional1']
                             record["arc_current_peak"] = float(arc_str) if arc_str else None
-                        # Add logic for breakdown if it's reliably in a specific field
 
                 except (ValueError, TypeError) as e:
                     self.log_message(f"Error converting step {step_num} results for Supabase: {e}")
@@ -650,11 +652,9 @@ class MainWindow(QMainWindow):
         if records_to_insert:
             try:
                 data, count = self.supabase_client.table('vitrek_test_results').insert(records_to_insert).execute()
-                # Check response - Supabase API v2 returns APIResponse object
-                if hasattr(data, '__len__') and len(data) > 1 and data[1]: # Check if data list exists and has content
+                if hasattr(data, '__len__') and len(data) > 1 and data[1]:
                     self.log_message(f"Successfully logged {len(data[1])} step result(s) to Supabase.")
                 else:
-                    # Log potential error details if available in the response
                     error_info = data[0] if hasattr(data, '__len__') and data else data
                     self.log_message(f"Failed to log results to Supabase. Response: {error_info}")
                     self.show_error("Supabase Log Failed", f"Could not log results. Response: {error_info}")
@@ -764,11 +764,14 @@ class MainWindow(QMainWindow):
 
                     # Update UI list based on the loaded sequence (already in self.sequencer.sequence)
                     self.update_sequence_list()
-                    # Update sequence name field
-                    for name, sid in saved_sequences:
-                        if sid == sequence_id:
-                             self.sequence_name_input.setText(name)
-                             break
+                    # Update sequence name field using the name now stored in sequencer
+                    if self.sequencer.current_sequence_name:
+                        self.sequence_name_input.setText(self.sequencer.current_sequence_name)
+                    else: # Fallback if name wasn't stored somehow
+                        for name, sid in saved_sequences:
+                             if sid == sequence_id:
+                                  self.sequence_name_input.setText(name)
+                                  break
                 else:
                     self.show_error("Load Failed", "Could not load sequence details from Supabase.")
             else:

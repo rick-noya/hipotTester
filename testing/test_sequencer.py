@@ -15,6 +15,8 @@ class TestSequencer:
             raise TypeError("TestSequencer requires a V7xDevice instance.")
         self.device = device
         self.sequence = [] # List to store configured steps (e.g., dictionaries)
+        self.current_sequence_id = None # ID of the currently loaded/saved sequence
+        self.current_sequence_name = None # Name of the currently loaded/saved sequence
         self.debug = device.debug # Inherit debug state from device
         self.supabase_client = get_supabase_client()
 
@@ -48,6 +50,8 @@ class TestSequencer:
 
         print("Device sequence cleared.")
         self.sequence = [] # Also clear internal sequence representation
+        self.current_sequence_id = None # Reset current sequence info
+        self.current_sequence_name = None
         return True
 
     def add_step_to_device(self, step_config):
@@ -282,8 +286,10 @@ class TestSequencer:
                     print(error_msg)
                     return False, error_msg
 
-            sequence_id = res_sequence.data[0]['id']
-            print(f"Sequence header saved with ID: {sequence_id}")
+            # ----> Store the ID and Name <----
+            self.current_sequence_id = res_sequence.data[0]['id']
+            self.current_sequence_name = sequence_name
+            print(f"Sequence header saved with ID: {self.current_sequence_id}")
 
             # 2. Prepare and insert steps into test_steps table
             steps_to_insert = []
@@ -293,7 +299,7 @@ class TestSequencer:
                 params_json = json.dumps(step_config) # Basic serialization
 
                 steps_to_insert.append({
-                    "sequence_id": sequence_id,
+                    "sequence_id": self.current_sequence_id,
                     "step_number": i + 1,
                     "step_type": step_config.get('type', 'UNKNOWN'),
                     "parameters": params_json
@@ -309,10 +315,13 @@ class TestSequencer:
                     # Attempt to delete the sequence header we just created?
                     print(f"Error: {error_msg}. Rolling back sequence header is recommended.")
                     try:
-                         self.supabase_client.table("test_sequences").delete().eq('id', sequence_id).execute()
-                         print(f"Rolled back sequence header ID: {sequence_id}")
+                         self.supabase_client.table("test_sequences").delete().eq('id', self.current_sequence_id).execute()
+                         print(f"Rolled back sequence header ID: {self.current_sequence_id}")
                     except Exception as del_e:
                          print(f"Failed to rollback sequence header: {del_e}")
+                    # Clear stored ID/Name on failure
+                    self.current_sequence_id = None
+                    self.current_sequence_name = None
                     return False, error_msg
 
             print(f"Successfully saved {len(steps_to_insert)} steps for sequence '{sequence_name}'.")
@@ -322,6 +331,8 @@ class TestSequencer:
             error_msg = f"An unexpected error occurred during save: {e}"
             print(error_msg)
             # Attempt rollback if sequence_id was obtained?
+            self.current_sequence_id = None # Clear on exception
+            self.current_sequence_name = None
             return False, error_msg
 
     def list_saved_sequences(self):
@@ -363,6 +374,10 @@ class TestSequencer:
                                           .execute()
             if not res_seq.data:
                  print(f"Error: Sequence with ID {sequence_id} not found.")
+                 # Reset current sequence info on load failure
+                 self.sequence = []
+                 self.current_sequence_id = None
+                 self.current_sequence_name = None
                  return None
             sequence_name = res_seq.data.get('sequence_name', 'Unknown')
             print(f"Found sequence: '{sequence_name}'")
@@ -409,9 +424,16 @@ class TestSequencer:
 
             # Update the internal sequence *after* successful loading
             self.sequence = loaded_sequence
+            # ----> Store the loaded ID and Name <----
+            self.current_sequence_id = sequence_id
+            self.current_sequence_name = sequence_name
             print(f"Sequence '{sequence_name}' loaded successfully with {len(self.sequence)} steps.")
             return self.sequence # Return the loaded sequence list
 
         except Exception as e:
             print(f"An unexpected error occurred loading sequence: {e}")
+            # Reset current sequence info on load failure
+            self.sequence = []
+            self.current_sequence_id = None
+            self.current_sequence_name = None
             return None 
