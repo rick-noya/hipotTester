@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QComboBox
 )
 from PySide6.QtGui import QAction, QColor
-from PySide6.QtCore import Qt, Signal, QObject, QThread
+from PySide6.QtCore import Qt, Signal, QObject, QThread, Slot
 
 # Import device and sequencer (assuming they are in sibling directories)
 import os
@@ -161,10 +161,11 @@ class MainWindow(QMainWindow):
         self.clear_sequence_button.setEnabled(False)
         self.run_test_button.setEnabled(False)
 
-        # --- Test Context Group --- #
-        self.dut_serial_input = QLineEdit()
+        # --- Test Context Group --- # Renamed DUT field
+        self.assemblage_input = QLineEdit()
+        self.assemblage_input.setPlaceholderText("Scan Assemblage Barcode ID here") # Updated placeholder
         self.operator_name_combo = QComboBox()
-        self.operator_name_combo.setEditable(True) # Allow adding new names temporarily?
+        self.operator_name_combo.setEditable(True)
         self.operator_name_combo.setPlaceholderText("Select or type Operator")
         self.sequence_name_input = QLineEdit()
 
@@ -181,10 +182,10 @@ class MainWindow(QMainWindow):
         conn_layout.addStretch()
         conn_group.setLayout(conn_layout)
 
-        # --- Test Context Group --- #
+        # --- Test Context Group --- # Renamed DUT Row
         context_group = QGroupBox("Test Context")
         context_layout = QFormLayout()
-        context_layout.addRow("DUT Serial Number:", self.dut_serial_input)
+        context_layout.addRow("Assemblage ID:", self.assemblage_input) # Updated Label
         context_layout.addRow("Operator Name:", self.operator_name_combo)
         context_layout.addRow("Sequence Name:", self.sequence_name_input)
         context_group.setLayout(context_layout)
@@ -278,6 +279,8 @@ class MainWindow(QMainWindow):
         self.add_step_button.clicked.connect(self.open_test_setup_dialog)
         self.clear_sequence_button.clicked.connect(self.clear_sequence)
         self.run_test_button.clicked.connect(self.run_test)
+        # Connect the assemblage input field signal
+        self.assemblage_input.editingFinished.connect(self.handle_assemblage_scan)
 
     # --- Device Connection --- #
 
@@ -569,13 +572,13 @@ class MainWindow(QMainWindow):
 
     def log_to_supabase(self, results):
         self.log_message("Attempting to log results to Supabase...")
-        dut_serial = self.dut_serial_input.text().strip() or None
-        # Get selected operator name from ComboBox
+        # Use the value from the assemblage input field
+        assemblage_id_text = self.assemblage_input.text().strip() or None
         operator_name = self.operator_name_combo.currentText().strip() or None
         sequence_id = self.sequencer.current_sequence_id
 
         if sequence_id is None:
-            self.log_message("Warning: No sequence ID available (sequence not saved/loaded?). Skipping Supabase log.")
+            self.log_message("Warning: No sequence ID available. Skipping Supabase log.")
             return
 
         overall_status_code = results.get('overall', '?')
@@ -590,7 +593,10 @@ class MainWindow(QMainWindow):
 
             record = {
                 "sequence_id": sequence_id,
-                "dut_serial_number": dut_serial,
+                # Log the scanned/entered text as dut_serial_number
+                # The verification step above is for UI feedback, logging still uses the entered value.
+                # If verification *must* pass before logging, add a check here.
+                "dut_serial_number": assemblage_id_text,
                 "operator_name": operator_name,
                 "overall_result": overall_result_text,
                 "step_number": step_num,
@@ -837,6 +843,57 @@ class MainWindow(QMainWindow):
             self.log_message(f"Error loading operators from Supabase: {e}")
             self.show_error("Supabase Error", f"Could not load operator names: {e}")
             self.operator_name_combo.setPlaceholderText("Error loading operators")
+
+    # --- Assemblage Handling --- #
+    @Slot()
+    def handle_assemblage_scan(self):
+        """Called when the user finishes editing the Assemblage ID field (e.g., after scan)."""
+        scanned_id_str = self.assemblage_input.text().strip()
+        if not scanned_id_str:
+            # Field cleared, maybe clear related info?
+            return
+
+        self.log_message(f"Assemblage ID scanned/entered: {scanned_id_str}")
+
+        if not self.supabase_client:
+            self.log_message("Supabase not connected, cannot verify Assemblage ID.")
+            # Decide if we allow testing without verification?
+            return
+
+        try:
+            # Assume the barcode contains the integer ID
+            assemblage_id = int(scanned_id_str)
+        except ValueError:
+            self.log_message(f"Error: Scanned Assemblage ID '{scanned_id_str}' is not a valid integer.")
+            # Optionally clear the field or show a visual warning
+            # self.assemblage_input.setStyleSheet("border: 1px solid red;") # Example
+            QMessageBox.warning(self, "Invalid ID", f"The scanned Assemblage ID '{scanned_id_str}' is not a valid number.")
+            return
+
+        # Query Supabase to verify the ID exists
+        try:
+            self.log_message(f"Verifying Assemblage ID {assemblage_id} in Supabase...")
+            response = self.supabase_client.table("assemblages") \
+                                           .select("id, assemblage_name") \
+                                           .eq("id", assemblage_id) \
+                                           .maybe_single() \
+                                           .execute()
+
+            if response.data:
+                assemblage_name = response.data.get('assemblage_name', '(No Name)')
+                self.log_message(f"Assemblage ID {assemblage_id} verified. Name: '{assemblage_name}'")
+                # Clear any visual warning
+                # self.assemblage_input.setStyleSheet("") # Reset style
+                # Optionally update other UI elements if needed
+            else:
+                self.log_message(f"Error: Assemblage ID {assemblage_id} not found in Supabase.")
+                # Optionally clear the field or show a visual warning
+                # self.assemblage_input.setStyleSheet("border: 1px solid red;")
+                QMessageBox.warning(self, "ID Not Found", f"Assemblage ID {assemblage_id} was not found in the database.")
+
+        except Exception as e:
+            self.log_message(f"Error querying Supabase for Assemblage ID: {e}")
+            self.show_error("Supabase Error", f"Could not verify Assemblage ID: {e}")
 
 if __name__ == '__main__':
     # This check is important for multiprocessing/QThread safety on some platforms
