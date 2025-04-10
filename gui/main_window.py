@@ -21,8 +21,12 @@ from utils.constants import TEST_TYPES, STATUS_FLAGS, TERMINATION_STATES
 # Import the setup dialog
 from gui.test_setup_dialog import TestSetupDialog
 
+# Import LoginDialog
+from gui.login_dialog import LoginDialog
+from gui.profile_dialog import ProfileDialog
+
 # Import Supabase client utility
-from utils.supabase_client import get_supabase_client
+from utils.supabase_client import get_supabase_client, get_current_user, save_session, clear_session
 
 # Worker for running tests in a separate thread
 class TestWorker(QObject):
@@ -88,6 +92,8 @@ class MainWindow(QMainWindow):
         self.sequencer = None
         self.test_thread = None
         self.test_worker = None
+        self.current_user = None
+        self.user_profile = {}
 
         self.supabase_client = get_supabase_client()
 
@@ -101,6 +107,7 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage("Disconnected")
 
         self._initialize_device()
+        self._update_auth_ui()
 
     def _initialize_device(self):
         try:
@@ -114,8 +121,34 @@ class MainWindow(QMainWindow):
 
             # Initialize Supabase Client
             self.supabase_client = get_supabase_client()
-            # Load operators *after* client is initialized
+            
+            # Check for existing user session
             if self.supabase_client:
+                self.current_user = get_current_user()
+                if self.current_user:
+                    # Access email as an attribute
+                    user_email = getattr(self.current_user, 'email', 'Unknown')
+                    self.log_message(f"Restored session for user: {user_email}")
+                    
+                    # Fetch profile data for the restored user
+                    try:
+                        user_id = getattr(self.current_user, 'id', None)
+                        if user_id:
+                            response = self.supabase_client.table("profiles") \
+                                .select("first_name, last_name, phone_number") \
+                                .eq("id", user_id) \
+                                .maybe_single() \
+                                .execute()
+                            
+                            if response.data:
+                                self.user_profile = response.data
+                            else:
+                                self.user_profile = {}
+                    except Exception as e:
+                        self.log_message(f"Error fetching profile during session restore: {e}")
+                        self.user_profile = {}
+                    
+                # Load operators *after* client is initialized
                 self._load_operator_names()
 
             # Check connection *after* UI elements potentially reliant on Supabase are ready
@@ -135,6 +168,15 @@ class MainWindow(QMainWindow):
         self.disconnect_button.setEnabled(False)
         self.connection_status_label = QLabel("Status: Disconnected")
         self.connection_status_label.setStyleSheet("color: red")
+        
+        # Authentication
+        self.login_button = QPushButton("Login")
+        self.profile_button = QPushButton("Profile")
+        self.profile_button.setEnabled(False)
+        self.logout_button = QPushButton("Logout")
+        self.logout_button.setEnabled(False)
+        self.user_label = QLabel("Not logged in")
+        self.user_label.setStyleSheet("color: gray")
 
         # Direct Command
         self.command_input = QLineEdit()
@@ -183,6 +225,16 @@ class MainWindow(QMainWindow):
         conn_layout.addWidget(self.connect_button)
         conn_layout.addWidget(self.disconnect_button)
         conn_layout.addWidget(self.connection_status_label)
+        
+        # Add authentication widgets
+        conn_layout.addSpacing(20)
+        conn_layout.addWidget(self.user_label)
+        auth_buttons_layout = QHBoxLayout()
+        auth_buttons_layout.addWidget(self.login_button)
+        auth_buttons_layout.addWidget(self.profile_button)
+        auth_buttons_layout.addWidget(self.logout_button)
+        conn_layout.addLayout(auth_buttons_layout)
+        
         conn_layout.addStretch()
         conn_group.setLayout(conn_layout)
 
@@ -266,6 +318,21 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction(exit_action)
 
+        # Auth Menu
+        auth_menu = menu_bar.addMenu("&Account")
+        self.login_action = QAction("&Login", self)
+        self.login_action.triggered.connect(self.show_login_dialog)
+        self.profile_action = QAction("&Profile", self)
+        self.profile_action.triggered.connect(self.show_profile_dialog)
+        self.profile_action.setEnabled(False)
+        self.logout_action = QAction("&Logout", self)
+        self.logout_action.triggered.connect(self.logout_user)
+        self.logout_action.setEnabled(False)
+        
+        auth_menu.addAction(self.login_action)
+        auth_menu.addAction(self.profile_action)
+        auth_menu.addAction(self.logout_action)
+
         # Device Menu
         device_menu = menu_bar.addMenu("&Device")
         connect_action = QAction("&Connect", self)
@@ -300,6 +367,10 @@ class MainWindow(QMainWindow):
         self.assemblage_input.editingFinished.connect(self.handle_assemblage_scan)
         # Connect sequence list selection change
         self.sequence_list_widget.currentItemChanged.connect(self.display_step_details)
+        # Connect auth buttons
+        self.login_button.clicked.connect(self.show_login_dialog)
+        self.profile_button.clicked.connect(self.show_profile_dialog)
+        self.logout_button.clicked.connect(self.logout_user)
 
     # --- Device Connection --- #
 
@@ -951,6 +1022,146 @@ class MainWindow(QMainWindow):
                  details_text += f"&nbsp;&nbsp;{key_display:<18}: {value_display}<br>"
 
         self.step_details_output.setText(details_text)
+
+    # --- Authentication Handling --- #
+    
+    def show_profile_dialog(self):
+        """Show the profile dialog for viewing and editing user profile"""
+        if not self.supabase_client or not self.current_user:
+            self.show_error("Profile Error", "You must be logged in to view your profile.")
+            return
+            
+        dialog = ProfileDialog(self.supabase_client, self.current_user, self)
+        dialog.profile_updated.connect(self._handle_profile_updated)
+        
+        if dialog.exec():
+            self.log_message("Profile updated successfully.")
+        else:
+            self.log_message("Profile dialog closed.")
+    
+    def _handle_profile_updated(self):
+        """Handle when profile has been updated in the profile dialog"""
+        self._update_auth_ui()  # Refresh UI with new profile info
+    
+    def show_login_dialog(self):
+        """Show the login dialog and handle authentication"""
+        if not self.supabase_client:
+            self.show_error("Authentication Error", "Supabase client not available.")
+            return
+            
+        dialog = LoginDialog(self.supabase_client, self)
+        dialog.login_successful.connect(self.handle_login_success)
+        
+        if dialog.exec():
+            # Dialog accepted (login successful)
+            pass
+        else:
+            # Dialog rejected or closed
+            self.log_message("Login cancelled.")
+    
+    def handle_login_success(self, user_data):
+        """Handle successful login"""
+        self.current_user = user_data
+        # Access user email as an attribute instead of dictionary lookup
+        user_email = getattr(self.current_user, 'email', 'Unknown')
+        self.log_message(f"Logged in as {user_email}")
+        
+        # Save the session for future use
+        if self.supabase_client and hasattr(self.supabase_client.auth, 'get_session'):
+            try:
+                session = self.supabase_client.auth.get_session()
+                save_session(session)
+            except Exception as e:
+                self.log_message(f"Could not save session: {e}")
+        
+        # Fetch profile information
+        if self.supabase_client:
+            try:
+                # Access user ID as an attribute
+                user_id = getattr(self.current_user, 'id', None)
+                if user_id:
+                    response = self.supabase_client.table("profiles") \
+                        .select("first_name, last_name, phone_number") \
+                        .eq("id", user_id) \
+                        .maybe_single() \
+                        .execute()
+                    
+                    if response.data:
+                        # Store profile info separately since it's a dictionary
+                        self.user_profile = response.data
+                        self.log_message(f"Loaded profile for {self.user_profile.get('first_name', '')} {self.user_profile.get('last_name', '')}")
+                    else:
+                        self.log_message("No profile information found for user")
+                        self.user_profile = {}
+            except Exception as e:
+                self.log_message(f"Error fetching profile: {e}")
+                self.user_profile = {}
+        
+        self._update_auth_ui()
+        
+        # Optionally fetch and load additional user data
+        self._load_operator_names()
+        
+        # Set the logged-in user as the current operator
+        if user_email and user_email != 'Unknown':
+            index = self.operator_name_combo.findText(user_email)
+            if index >= 0:
+                self.operator_name_combo.setCurrentIndex(index)
+    
+    def logout_user(self):
+        """Sign out the current user"""
+        if not self.supabase_client:
+            return
+            
+        try:
+            self.supabase_client.auth.sign_out()
+            self.current_user = None
+            self.log_message("Logged out successfully")
+            
+            # Clear the saved session
+            clear_session()
+            
+            self._update_auth_ui()
+        except Exception as e:
+            self.log_message(f"Error during logout: {e}")
+    
+    def _update_auth_ui(self):
+        """Update the UI based on authentication state"""
+        is_logged_in = self.current_user is not None
+        
+        # Update buttons
+        self.login_button.setVisible(not is_logged_in)
+        self.profile_button.setVisible(is_logged_in)
+        self.profile_button.setEnabled(is_logged_in)
+        self.logout_button.setVisible(is_logged_in)
+        self.login_action.setEnabled(not is_logged_in)
+        self.profile_action.setEnabled(is_logged_in)
+        self.logout_action.setEnabled(is_logged_in)
+        
+        # Update user display
+        if is_logged_in:
+            # Access email as an attribute
+            email = getattr(self.current_user, 'email', 'Unknown')
+            # Get user's name from profile if available
+            if hasattr(self, 'user_profile') and self.user_profile:
+                first_name = self.user_profile.get('first_name', '')
+                last_name = self.user_profile.get('last_name', '')
+                
+                if first_name or last_name:
+                    display_name = f"{first_name} {last_name}".strip()
+                    self.user_label.setText(f"Logged in as: {display_name}")
+                else:
+                    self.user_label.setText(f"Logged in as: {email}")
+            else:
+                self.user_label.setText(f"Logged in as: {email}")
+                
+            self.user_label.setStyleSheet("color: green")
+        else:
+            self.user_label.setText("Not logged in")
+            self.user_label.setStyleSheet("color: gray")
+            
+        # You may also want to enable/disable other features based on login state
+        # For example, saving sequences might require login
 
 if __name__ == '__main__':
     # This check is important for multiprocessing/QThread safety on some platforms
