@@ -612,10 +612,10 @@ class MainWindow(QMainWindow):
 
             record = {
                 "sequence_id": sequence_id,
-                # Log the scanned/entered text as dut_serial_number
+                # Log the scanned/entered text as assemblage_id
                 # The verification step above is for UI feedback, logging still uses the entered value.
                 # If verification *must* pass before logging, add a check here.
-                "dut_serial_number": assemblage_id_text,
+                "assemblage_id": int(assemblage_id_text) if assemblage_id_text is not None else None,
                 "operator_name": operator_name,
                 "overall_result": overall_result_text,
                 "step_number": step_num,
