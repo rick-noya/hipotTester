@@ -1,4 +1,74 @@
+# PyInstaller
+build/
+dist/
+*.spec
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Python environment
+venv/
+env/
 .env
+.venv/
+ENV/
+
+# Distribution / packaging
+.Python
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Logs
+*.log
+logs/
+*.log.*
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+.project
+.pydevproject
+.settings/
+
+# Windows specific files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# macOS specific files
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+
+# Other common exclusions
+.coverage
+.hypothesis/
+.pytest_cache/
+htmlcov/
+coverage.xml
+*.cover
+
+# Project specific files
+# Add your specific project files or directories here
+
+# Hipot specific
+.hipot_session
+
 .env.local
 .env.development.local
 .env.test.local
