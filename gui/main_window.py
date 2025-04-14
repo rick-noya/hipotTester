@@ -1,5 +1,8 @@
 import sys
 import time # Import the time module
+import logging
+import os.path
+from datetime import datetime
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTextEdit, QLineEdit, QLabel, QStatusBar,
@@ -126,6 +129,9 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("V7X Control Panel")
         self.setGeometry(100, 100, 800, 600)
 
+        # Initialize file logging
+        self._setup_logging()
+
         self.device = None
         self.sequencer = None
         self.test_thread = None
@@ -148,11 +154,51 @@ class MainWindow(QMainWindow):
         self._initialize_device()
         self._update_auth_ui()
 
+    def _setup_logging(self):
+        """Set up logging to file in the application directory"""
+        # Get the application directory (where the exe is running from)
+        app_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+        
+        # Create logs directory if it doesn't exist
+        logs_dir = os.path.join(app_dir, 'logs')
+        os.makedirs(logs_dir, exist_ok=True)
+        
+        # Create a log file with timestamp in name
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_file = os.path.join(logs_dir, f'hipot_{timestamp}.log')
+        
+        # Configure the logger
+        self.logger = logging.getLogger('hipot')
+        self.logger.setLevel(logging.DEBUG)
+        
+        # File handler for the log file
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setLevel(logging.DEBUG)
+        
+        # Formatter
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        file_handler.setFormatter(formatter)
+        
+        # Add handlers to logger
+        self.logger.addHandler(file_handler)
+        
+        # Log startup message
+        self.logger.info("Application started")
+        self.logger.info(f"Logging to: {log_file}")
+
     def _initialize_device(self):
         try:
+            self.logger.info("Initializing V7xDevice...")
             self.device = V7xDevice(debug=False) # Set debug=True for more logs
+            
+            # Attach our logger to the device
+            if hasattr(self.device, 'set_logger'):
+                self.device.set_logger(self.logger)
+                
             if not self.device._dll: # Check if DLL loaded
-                 self.show_error("Device Initialization Failed", "DLL could not be loaded. Check path and compatibility.")
+                 error_msg = "DLL could not be loaded. Check path and compatibility."
+                 self.logger.error(f"Device Initialization Failed: {error_msg}")
+                 self.show_error("Device Initialization Failed", error_msg)
                  self.connect_button.setEnabled(False)
                  return
 
@@ -184,17 +230,23 @@ class MainWindow(QMainWindow):
                             else:
                                 self.user_profile = {}
                     except Exception as e:
-                        self.log_message(f"Error fetching profile during session restore: {e}")
+                        error_msg = f"Error fetching profile during session restore: {e}"
+                        self.log_message(error_msg)
+                        self.logger.error(error_msg)
                         self.user_profile = {}
 
             # Check connection *after* UI elements potentially reliant on Supabase are ready
             self.check_connection()
 
         except V7xDeviceError as e:
-            self.show_error("Device Initialization Error", str(e))
+            error_msg = str(e)
+            self.logger.error(f"Device Initialization Error: {error_msg}")
+            self.show_error("Device Initialization Error", error_msg)
             self.connect_button.setEnabled(False)
         except Exception as e:
-            self.show_error("Unexpected Error", f"An unexpected error occurred during initialization: {e}")
+            error_msg = f"An unexpected error occurred during initialization: {e}"
+            self.logger.error(error_msg)
+            self.show_error("Unexpected Error", error_msg)
             self.connect_button.setEnabled(False)
 
     def _create_widgets(self):
@@ -355,12 +407,17 @@ class MainWindow(QMainWindow):
         save_action.triggered.connect(self.save_sequence)
         load_action = QAction("&Load Sequence...", self)
         load_action.triggered.connect(self.load_sequence)
+        
+        view_logs_action = QAction("&View Logs...", self)
+        view_logs_action.triggered.connect(self.open_logs_directory)
 
         exit_action = QAction("&Exit", self)
         exit_action.triggered.connect(self.close)
 
         file_menu.addAction(save_action)
         file_menu.addAction(load_action)
+        file_menu.addSeparator()
+        file_menu.addAction(view_logs_action)
         file_menu.addSeparator()
         file_menu.addAction(exit_action)
 
@@ -421,11 +478,13 @@ class MainWindow(QMainWindow):
     # --- Device Connection --- #
 
     def check_connection(self):
+        self.logger.info("Checking for connected V7X devices...")
         if self.device and self.device.find_device() > 0:
             self.log_message("Device detected. Attempting connection...")
             self.connect_device()
         else:
             self.log_message("No V7X device detected on startup.")
+            self.logger.warning("No V7X device detected on startup.")
             self.update_ui_connection_state(False)
 
     def connect_device(self):
@@ -444,8 +503,10 @@ class MainWindow(QMainWindow):
             # Query IDN on connect
             self.send_direct_command("*IDN?")
         else:
+            error_msg = "Could not open the V7X device. Check logs."
             self.log_message("Failed to connect to device.")
-            self.show_error("Connection Failed", "Could not open the V7X device. Check logs.")
+            self.logger.error(error_msg)
+            self.show_error("Connection Failed", error_msg)
             self.update_ui_connection_state(False)
 
     def disconnect_device(self):
@@ -1018,17 +1079,30 @@ class MainWindow(QMainWindow):
     # --- Utility Methods --- #
 
     def log_message(self, message):
+        """Log a message to the UI and to the log file"""
         timestamp = time.strftime("%H:%M:%S")
         self.command_response_output.append(f"[{timestamp}] {message}")
         # Scroll to the bottom
         self.command_response_output.verticalScrollBar().setValue(
             self.command_response_output.verticalScrollBar().maximum()
         )
-        print(f"LOG: {message}") # Also print to console for debugging
+        
+        # Log to file if logger exists
+        if hasattr(self, 'logger'):
+            self.logger.info(message)
+            
+        # Print to console for debugging
+        print(f"LOG: {message}")
 
     def show_error(self, title, message):
+        """Display an error message and log it"""
         QMessageBox.critical(self, title, message)
-        self.log_message(f"ERROR: {title} - {message}")
+        error_message = f"ERROR: {title} - {message}"
+        self.log_message(error_message)
+        
+        # Also log to error level in file logger
+        if hasattr(self, 'logger'):
+            self.logger.error(error_message)
 
     def show_about(self):
         QMessageBox.about(self, "About V7X Control Panel",
@@ -1036,8 +1110,14 @@ class MainWindow(QMainWindow):
                           f"DLL Version: {self.device.get_library_version() if self.device else 'N/A'}")
 
     def closeEvent(self, event):
+        """Handle window close event"""
+        # Log application exit
+        if hasattr(self, 'logger'):
+            self.logger.info("Application closing")
+            
         # Ensure device is closed when window is closed
         if self.device and self.device.is_open:
+            self.logger.info("Closing device connection on exit...")
             print("Closing device connection on exit...")
             self.device.close()
         event.accept() # Allow window to close
@@ -1308,6 +1388,29 @@ class MainWindow(QMainWindow):
                             file_action.setEnabled(save_enabled)
                         elif file_action.text() == "&Load Sequence...":
                             file_action.setEnabled(is_logged_in)
+
+    def open_logs_directory(self):
+        """Open the logs directory in the file explorer"""
+        try:
+            # Get the application directory (where the exe is running from)
+            app_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+            logs_dir = os.path.join(app_dir, 'logs')
+            
+            # Create the directory if it doesn't exist
+            os.makedirs(logs_dir, exist_ok=True)
+            
+            # Open the directory in the file explorer
+            self.log_message(f"Opening logs directory: {logs_dir}")
+            if sys.platform == 'win32':
+                os.startfile(logs_dir)
+            elif sys.platform == 'darwin':  # macOS
+                import subprocess
+                subprocess.Popen(['open', logs_dir])
+            else:  # Linux
+                import subprocess
+                subprocess.Popen(['xdg-open', logs_dir])
+        except Exception as e:
+            self.show_error("Error Opening Logs", f"Could not open logs directory: {e}")
 
 if __name__ == '__main__':
     # This check is important for multiprocessing/QThread safety on some platforms

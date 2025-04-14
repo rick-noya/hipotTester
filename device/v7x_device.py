@@ -2,6 +2,7 @@ import ctypes
 import sys
 import time
 import os
+import logging
 
 # Import constants from the utils module
 # Assuming utils package is in the python path or relative import works
@@ -22,29 +23,66 @@ class V7xDeviceError(Exception):
 class V7xDevice:
     """Handles communication with a Vitrek V7X device via SLABHIDtoUART DLL."""
 
-    def __init__(self, debug=False):
+    def __init__(self, debug=False, logger=None):
         self._dll = None
         self._device_handle = HID_UART_DEVICE(None)
         self._is_open = False
         self.debug = debug # Set to True for verbose output
+        self._logger = logger # Optional external logger
+        
         try:
             self._load_dll()
             self._define_functions()
-            print(f"DLL Library Version: {self.get_library_version()}")
+            self._log_info(f"DLL Library Version: {self.get_library_version()}")
         except V7xDeviceError as e:
-            print(f"Error initializing V7xDevice: {e}")
+            self._log_error(f"Error initializing V7xDevice: {e}")
             # Allow object creation but it will be non-functional
             self._dll = None
+
+    def set_logger(self, logger):
+        """Set an external logger for the device."""
+        self._logger = logger
+        self._log_info("External logger attached to V7xDevice")
+
+    def _log_info(self, message):
+        """Log an info message to both console and logger if available."""
+        print(message)
+        if self._logger and hasattr(self._logger, 'info'):
+            self._logger.info(f"V7xDevice: {message}")
+
+    def _log_error(self, message):
+        """Log an error message to both console and logger if available."""
+        print(f"ERROR: {message}")
+        if self._logger and hasattr(self._logger, 'error'):
+            self._logger.error(f"V7xDevice: {message}")
+
+    def _log_warning(self, message):
+        """Log a warning message to both console and logger if available."""
+        print(f"WARNING: {message}")
+        if self._logger and hasattr(self._logger, 'warning'):
+            self._logger.warning(f"V7xDevice: {message}")
+
+    def _log_debug(self, message):
+        """Log a debug message if debug is enabled and logger is available."""
+        if self.debug:
+            print(f"DEBUG: {message}")
+            if self._logger and hasattr(self._logger, 'debug'):
+                self._logger.debug(f"V7xDevice: {message}")
 
     def _load_dll(self):
         """Load the SLABHIDtoUART DLL."""
         if not os.path.exists(DLL_PATH):
-            raise V7xDeviceError(f"DLL not found at path: {DLL_PATH}. Please check utils/constants.py")
+            error_msg = f"DLL not found at path: {DLL_PATH}. Please check utils/constants.py"
+            self._log_error(error_msg)
+            raise V7xDeviceError(error_msg)
+            
         try:
             self._dll = ctypes.WinDLL(DLL_PATH)
-            print(f"Successfully loaded DLL: {DLL_PATH}")
+            self._log_info(f"Successfully loaded DLL: {DLL_PATH}")
         except OSError as e:
-            raise V7xDeviceError(f"Error loading DLL from path: {DLL_PATH}. OSError: {e}")
+            error_msg = f"Error loading DLL from path: {DLL_PATH}. OSError: {e}"
+            self._log_error(error_msg)
+            raise V7xDeviceError(error_msg)
 
     def _define_functions(self):
         """Define ctypes function signatures for the DLL functions."""
@@ -110,31 +148,51 @@ class V7xDevice:
         num_devices = DWORD(0)
         status = self._dll.HidUart_GetNumDevices(ctypes.byref(num_devices), WORD(VID), WORD(PID))
         if status != HID_UART_SUCCESS:
-            print(f"Error checking for devices: {status}")
+            self._log_error(f"Error checking for devices: {status}")
             return 0
+        if num_devices.value == 0:
+            self._log_info(f"No V7X devices found with VID={VID:04x}, PID={PID:04x}")
+        else:
+            self._log_info(f"Found {num_devices.value} V7X device(s)")
         return num_devices.value
 
     def open(self, device_index=0):
         """Open a connection to the specified device index."""
-        if not self._dll: return False
+        if not self._dll: 
+            self._log_error("Cannot open device: DLL not loaded")
+            return False
+            
         if self._is_open:
-            print("Device already open.")
+            self._log_info("Device already open.")
             return True
 
+        self._log_info(f"Attempting to open device at index {device_index}...")
         status = self._dll.HidUart_Open(ctypes.byref(self._device_handle), DWORD(device_index), WORD(VID), WORD(PID))
         if status != HID_UART_SUCCESS or not self._device_handle.value:
-            print(f"Error opening device {device_index}: {status}")
+            self._log_error(f"Error opening device {device_index}: status code {status}")
             self._device_handle = HID_UART_DEVICE(None)
             return False
 
         self._is_open = True
-        print(f"Device {device_index} opened successfully.")
+        self._log_info(f"Device {device_index} opened successfully. Handle: {self._device_handle.value}")
 
         # Configure UART and Timeouts upon opening
-        if not self._configure_uart(): self.close(); return False
-        if not self._set_timeouts(DEFAULT_READ_TIMEOUT_MS, DEFAULT_WRITE_TIMEOUT_MS): self.close(); return False
-        if not self.flush_buffers(): self.close(); return False
+        if not self._configure_uart(): 
+            self._log_error("Failed to configure UART settings")
+            self.close()
+            return False
+            
+        if not self._set_timeouts(DEFAULT_READ_TIMEOUT_MS, DEFAULT_WRITE_TIMEOUT_MS): 
+            self._log_error("Failed to set timeouts")
+            self.close()
+            return False
+            
+        if not self.flush_buffers(): 
+            self._log_error("Failed to flush device buffers")
+            self.close()
+            return False
 
+        self._log_info("Device fully configured and ready")
         return True
 
     def close(self):

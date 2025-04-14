@@ -1,12 +1,35 @@
 import ctypes
+import os
+import sys
 
 # Device Identification
 VID = 4292 # Default Vitrek VID
 PID = 34869 # Default Vitrek V7X PID
 
-# --- IMPORTANT: Update this path to the actual location of your DLL file ---
-# Example path, CHANGE THIS if your DLL is elsewhere
-DLL_PATH = r"C:\Coding\hipot\SLABHIDtoUART.dll"
+# --- DLL Path Configuration ---
+# First check if running from executable or development environment
+# Get the application directory (where the exe is running from)
+app_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+
+# Define possible DLL locations to check
+dll_name = "SLABHIDtoUART.dll"
+possible_dll_paths = [
+    os.path.join(app_dir, dll_name),                     # Same directory as executable
+    os.path.join(app_dir, 'drivers', dll_name),          # drivers subdirectory
+    os.path.join(os.path.dirname(__file__), dll_name),   # Same directory as this file
+    f"C:\\Coding\\hipot\\{dll_name}",                    # Original hardcoded path
+]
+
+# Find the first existing DLL path
+DLL_PATH = None
+for path in possible_dll_paths:
+    if os.path.exists(path):
+        DLL_PATH = path
+        break
+
+# If no valid path found, use the default (will fail with better error message)
+if DLL_PATH is None:
+    DLL_PATH = possible_dll_paths[0]  # Default to first path for clear error reporting
 
 # Define Basic CTypes used by the DLL
 DWORD = ctypes.c_ulong

@@ -100,3 +100,51 @@ This application provides a graphical user interface (GUI) for controlling a V7x
 ```
 
 _(Feel free to add sections like Contributing, License, etc. as needed)_
+
+## Building the Executable
+
+### Prerequisites
+
+- Python 3.9+ installed
+- PyInstaller: `pip install pyinstaller`
+- Required Python packages: `pip install -r requirements.txt`
+- The SLABHIDtoUART.dll must be available
+
+### Build Steps
+
+1. Place the `SLABHIDtoUART.dll` file in the root project directory
+2. Run PyInstaller with the provided spec file:
+   ```
+   pyinstaller hipot.spec
+   ```
+3. Find the built executable in the `dist` folder
+
+Alternatively, you can build with this direct command:
+
+```
+pyinstaller --name="hipot_0.1.0" --onefile --windowed --add-data="SLABHIDtoUART.dll;." --add-data="utils;utils" --add-data="gui;gui" --add-data="device;device" --add-data="testing;testing" main.py
+```
+
+## Running the Application
+
+1. Run `hipot_0.1.0.exe` from the `dist` folder
+2. The application will create a `logs` folder in the same directory as the executable
+3. If you encounter issues, check the log files for more detailed error information
+
+## Log Files
+
+The application now creates log files to help diagnose issues:
+
+- Log files are stored in the `logs` folder in the same directory as the executable
+- Each session creates a new log file with a timestamp in the name
+- To access logs, use the "View Logs..." option in the File menu
+- Logs contain detailed information about device connection, errors, and operations
+
+## Troubleshooting
+
+If you encounter the error "Could not open V7X device. Check logs":
+
+1. Check the logs folder for detailed error information
+2. Ensure the `SLABHIDtoUART.dll` was included with the executable
+3. Verify the device is connected and recognized by your system
+4. Try running the application with administrator privileges
