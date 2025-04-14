@@ -584,6 +584,14 @@ class MainWindow(QMainWindow):
         if not self.sequencer or not self.device or not self.device.is_open:
             self.show_error("Run Error", "Device not connected or sequencer not ready.")
             return
+            
+        # Check if user is authenticated
+        if not self.supabase_client or not self.current_user:
+            self.log_message("Authentication required: Please log in to run tests.")
+            QMessageBox.warning(self, "Authentication Required", 
+                              "You must be logged in to run tests and log results. Please log in first.")
+            return
+            
         if not self.sequencer.sequence:
              # Optionally, query device steps here?
              reply = QMessageBox.question(self, "Run Test", "Local sequence is empty. Run sequence currently on device?",
@@ -710,22 +718,33 @@ class MainWindow(QMainWindow):
 
     def log_to_supabase(self, results):
         self.log_message("Attempting to log results to Supabase...")
+        
+        # Check if user is authenticated
+        if not self.supabase_client or not self.current_user:
+            self.log_message("Authentication required: Please log in to log test results.")
+            QMessageBox.warning(self, "Authentication Required", 
+                              "You must be logged in to log test results to the database. Please log in first.")
+            return
+
         # Use the value from the assemblage input field
         assemblage_id_text = self.assemblage_input.text().strip() or None
         
         # Use logged-in user's name instead of operator name dropdown
         operator_name = None
-        if self.current_user:
-            # First try to get name from profile
-            if hasattr(self, 'user_profile') and self.user_profile:
-                first_name = self.user_profile.get('first_name', '')
-                last_name = self.user_profile.get('last_name', '')
-                if first_name or last_name:
-                    operator_name = f"{first_name} {last_name}".strip()
+        # First try to get name from profile
+        if hasattr(self, 'user_profile') and self.user_profile:
+            first_name = self.user_profile.get('first_name', '')
+            last_name = self.user_profile.get('last_name', '')
+            if first_name or last_name:
+                operator_name = f"{first_name} {last_name}".strip()
+        
+        # If no profile name is available, use email
+        if not operator_name:
+            operator_name = getattr(self.current_user, 'email', None)
             
-            # If no profile name is available, use email
-            if not operator_name:
-                operator_name = getattr(self.current_user, 'email', None)
+        if not operator_name:
+            self.log_message("Warning: Could not determine operator name from user profile or email.")
+            operator_name = "Unknown Operator"
         
         sequence_id = self.sequencer.current_sequence_id
 
@@ -733,6 +752,8 @@ class MainWindow(QMainWindow):
             self.log_message("Warning: No sequence ID available. Skipping Supabase log.")
             return
 
+        self.log_message(f"Will log results with operator: {operator_name}")
+        
         overall_status_code = results.get('overall', '?')
         overall_result_text = 'PASS' if overall_status_code == '0' else 'FAIL'
         records_to_insert = []
@@ -834,6 +855,14 @@ class MainWindow(QMainWindow):
         if not self.sequencer or not self.device or not self.device.is_open:
             self.show_error("Save Error", "Device must be connected to save.")
             return
+            
+        # Check if user is authenticated
+        if not self.supabase_client or not self.current_user:
+            self.log_message("Authentication required: Please log in to save sequences.")
+            QMessageBox.warning(self, "Authentication Required", 
+                              "You must be logged in to save sequences. Please log in first.")
+            return
+            
         if not self.sequencer.sequence:
             self.show_error("Save Error", "No steps in the current sequence to save.")
             return
@@ -893,6 +922,14 @@ class MainWindow(QMainWindow):
         if not self.sequencer or not self.device or not self.device.is_open:
              self.show_error("Load Error", "Device must be connected to load.")
              return
+             
+        # Check if user is authenticated
+        if not self.supabase_client or not self.current_user:
+            self.log_message("Authentication required: Please log in to load sequences.")
+            QMessageBox.warning(self, "Authentication Required", 
+                              "You must be logged in to load sequences. Please log in first.")
+            return
+             
         if not self.sequencer.supabase_client:
               self.show_error("Load Error", "Supabase client not available.")
               return
@@ -1041,9 +1078,10 @@ class MainWindow(QMainWindow):
 
         self.log_message(f"Assemblage ID scanned/entered: {scanned_id_str}")
 
-        if not self.supabase_client:
-            self.log_message("Supabase not connected, cannot verify Assemblage ID.")
-            # Decide if we allow testing without verification?
+        if not self.supabase_client or not self.current_user:
+            self.log_message("Authentication required: Please log in to verify Assemblage ID.")
+            QMessageBox.warning(self, "Authentication Required", 
+                              "You must be logged in to verify Assemblage IDs. Please log in first.")
             return
 
         try:
@@ -1253,8 +1291,23 @@ class MainWindow(QMainWindow):
             self.operator_name_label.setText("Operator: Not logged in")
             self.operator_name_label.setStyleSheet("color: gray")
             
-        # You may also want to enable/disable other features based on login state
-        # For example, saving sequences might require login
+        # Update UI elements based on login state
+        # Only enable database-dependent operations if logged in
+        if self.device and self.device.is_open:
+            # Only update these if the device is connected, otherwise they're disabled anyway
+            save_enabled = is_logged_in and len(self.sequencer.sequence) > 0 if self.sequencer else False
+            self.add_step_button.setEnabled(True)  # Adding steps doesn't require login
+            self.run_test_button.setEnabled(is_logged_in)  # Running tests requires login for logging results
+            
+            # Update menu actions
+            for action in self.menuBar().actions():
+                if action.text() == "&File":
+                    file_menu = action.menu()
+                    for file_action in file_menu.actions():
+                        if file_action.text() == "&Save Sequence...":
+                            file_action.setEnabled(save_enabled)
+                        elif file_action.text() == "&Load Sequence...":
+                            file_action.setEnabled(is_logged_in)
 
 if __name__ == '__main__':
     # This check is important for multiprocessing/QThread safety on some platforms

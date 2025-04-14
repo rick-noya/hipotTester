@@ -5,7 +5,7 @@ from utils.parsing import parse_current_input
 # Import TEST_TYPES if needed directly, or pass from GUI
 from utils.constants import TEST_TYPES
 # Import supabase client utility
-from utils.supabase_client import get_supabase_client
+from utils.supabase_client import get_supabase_client, get_current_user
 
 class TestSequencer:
     """Manages building and running test sequences on the V7x device."""
@@ -257,6 +257,12 @@ class TestSequencer:
         if not self.supabase_client:
             print("Error: Supabase client not available. Cannot save sequence.")
             return False, "Supabase client not initialized."
+        
+        # Check if user is authenticated
+        if not get_current_user():
+            print("Error: User is not logged in. Cannot save sequence.")
+            return False, "Authentication required: You must be logged in to save sequences."
+            
         if not self.sequence:
             print("Error: No sequence steps configured to save.")
             return False, "No sequence steps configured."
@@ -346,6 +352,12 @@ class TestSequencer:
         if not self.supabase_client:
             print("Error: Supabase client not available.")
             return []
+            
+        # Check if user is authenticated
+        if not get_current_user():
+            print("Error: User is not logged in. Cannot list sequences.")
+            return []
+            
         try:
             res = self.supabase_client.table("test_sequences") \
                                       .select("id, sequence_name, description") \
@@ -366,6 +378,12 @@ class TestSequencer:
         if not self.supabase_client:
             print("Error: Supabase client not available.")
             return None
+            
+        # Check if user is authenticated
+        if not get_current_user():
+            print("Error: User is not logged in. Cannot load sequences.")
+            return None
+            
         if sequence_id is None:
             print("Error: Invalid sequence ID provided.")
             return None
