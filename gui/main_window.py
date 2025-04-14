@@ -51,24 +51,62 @@ class LoadSequenceDialog(QDialog):
     def __init__(self, sequences, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Load Test Sequence")
-        self.sequences = sequences # List of tuples (name, id)
+        self.setMinimumWidth(500)
+        self.setMinimumHeight(400)
+        self.sequences = sequences # List of tuples (name, id, description)
         self.selected_id = None
 
         layout = QVBoxLayout(self)
+        
+        # Top section for instructions
         layout.addWidget(QLabel("Select a sequence to load:"))
 
+        # Split layout for list and description
+        split_layout = QHBoxLayout()
+        
+        # Left side: sequence list
+        list_layout = QVBoxLayout()
         self.list_widget = QListWidget()
-        for name, seq_id in self.sequences:
+        for name, seq_id, description in self.sequences:
             item = QListWidgetItem(name)
             item.setData(Qt.UserRole, seq_id) # Store ID in item data
+            item.setData(Qt.UserRole + 1, description) # Store description in item data
             self.list_widget.addItem(item)
+        self.list_widget.itemSelectionChanged.connect(self.update_description)
         self.list_widget.itemDoubleClicked.connect(self.accept_selection)
-        layout.addWidget(self.list_widget)
+        list_layout.addWidget(self.list_widget)
+        split_layout.addLayout(list_layout)
+        
+        # Right side: description
+        desc_layout = QVBoxLayout()
+        desc_layout.addWidget(QLabel("Description:"))
+        self.description_display = QTextEdit()
+        self.description_display.setReadOnly(True)
+        self.description_display.setPlaceholderText("Select a sequence to view its description")
+        desc_layout.addWidget(self.description_display)
+        split_layout.addLayout(desc_layout)
+        
+        # Add the split layout to the main layout
+        layout.addLayout(split_layout)
 
         self.button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         self.button_box.accepted.connect(self.accept_selection)
         self.button_box.rejected.connect(self.reject)
         layout.addWidget(self.button_box)
+        
+        # Default: select the first item if any
+        if self.list_widget.count() > 0:
+            self.list_widget.setCurrentRow(0)
+    
+    def update_description(self):
+        """Update the description text based on the selected sequence"""
+        selected_items = self.list_widget.selectedItems()
+        if selected_items:
+            selected_item = selected_items[0]
+            description = selected_item.data(Qt.UserRole + 1) or ""
+            self.description_display.setText(description)
+        else:
+            self.description_display.clear()
 
     def accept_selection(self):
         selected_item = self.list_widget.currentItem()
@@ -94,6 +132,7 @@ class MainWindow(QMainWindow):
         self.test_worker = None
         self.current_user = None
         self.user_profile = {}
+        self.operator_name_label = None
 
         self.supabase_client = get_supabase_client()
 
@@ -147,9 +186,6 @@ class MainWindow(QMainWindow):
                     except Exception as e:
                         self.log_message(f"Error fetching profile during session restore: {e}")
                         self.user_profile = {}
-                    
-                # Load operators *after* client is initialized
-                self._load_operator_names()
 
             # Check connection *after* UI elements potentially reliant on Supabase are ready
             self.check_connection()
@@ -213,7 +249,13 @@ class MainWindow(QMainWindow):
         self.operator_name_combo = QComboBox()
         self.operator_name_combo.setEditable(True)
         self.operator_name_combo.setPlaceholderText("Select or type Operator")
+        self.operator_name_label = QLabel("Operator: Not logged in")
+        self.operator_name_label.setStyleSheet("color: gray")
         self.sequence_name_input = QLineEdit()
+        self.sequence_description_display = QTextEdit()
+        self.sequence_description_display.setReadOnly(True)
+        self.sequence_description_display.setPlaceholderText("Sequence description will appear here")
+        self.sequence_description_display.setMaximumHeight(60)
 
     def _create_layout(self):
         central_widget = QWidget()
@@ -242,8 +284,12 @@ class MainWindow(QMainWindow):
         context_group = QGroupBox("Test Context")
         context_layout = QFormLayout()
         context_layout.addRow("Assemblage ID:", self.assemblage_input) # Updated Label
-        context_layout.addRow("Operator Name:", self.operator_name_combo)
+        # Hide operator name dropdown - will use logged in user instead
+        self.operator_name_combo.setVisible(False)
+        # Add operator name label to display logged-in user
+        context_layout.addRow("Operator:", self.operator_name_label)
         context_layout.addRow("Sequence Name:", self.sequence_name_input)
+        context_layout.addRow("Description:", self.sequence_description_display)
         context_group.setLayout(context_layout)
 
         # --- Direct Command Group --- #
@@ -526,6 +572,8 @@ class MainWindow(QMainWindow):
                 self.log_message("Sequence cleared successfully.")
                 self.update_sequence_list()
                 self.results_output.clear()
+                self.sequence_name_input.clear()
+                self.sequence_description_display.clear()
             else:
                 self.log_message("Failed to clear sequence on device.")
                 self.show_error("Clear Failed", "Could not clear sequence on device. Check logs.")
@@ -664,7 +712,21 @@ class MainWindow(QMainWindow):
         self.log_message("Attempting to log results to Supabase...")
         # Use the value from the assemblage input field
         assemblage_id_text = self.assemblage_input.text().strip() or None
-        operator_name = self.operator_name_combo.currentText().strip() or None
+        
+        # Use logged-in user's name instead of operator name dropdown
+        operator_name = None
+        if self.current_user:
+            # First try to get name from profile
+            if hasattr(self, 'user_profile') and self.user_profile:
+                first_name = self.user_profile.get('first_name', '')
+                last_name = self.user_profile.get('last_name', '')
+                if first_name or last_name:
+                    operator_name = f"{first_name} {last_name}".strip()
+            
+            # If no profile name is available, use email
+            if not operator_name:
+                operator_name = getattr(self.current_user, 'email', None)
+        
         sequence_id = self.sequencer.current_sequence_id
 
         if sequence_id is None:
@@ -776,31 +838,56 @@ class MainWindow(QMainWindow):
             self.show_error("Save Error", "No steps in the current sequence to save.")
             return
 
-        # Prompt for sequence name
-        # Use current sequence name input field as default?
+        # Create a dialog for sequence name and description
+        save_dialog = QDialog(self)
+        save_dialog.setWindowTitle("Save Sequence")
+        save_dialog.setMinimumWidth(400)
+        
+        layout = QVBoxLayout(save_dialog)
+        
+        # Name input
+        name_layout = QFormLayout()
+        name_input = QLineEdit()
         default_name = self.sequence_name_input.text().strip()
-        seq_name, ok = QInputDialog.getText(self, "Save Sequence",
-                                            "Enter a unique name for this sequence:",
-                                            QLineEdit.EchoMode.Normal,
-                                            default_name)
-
-        if ok and seq_name:
+        name_input.setText(default_name)
+        name_layout.addRow("Sequence Name:", name_input)
+        
+        # Description input
+        description_input = QTextEdit()
+        description_input.setPlaceholderText("Enter a description for this sequence (optional)")
+        description_input.setMaximumHeight(100)
+        name_layout.addRow("Description:", description_input)
+        
+        layout.addLayout(name_layout)
+        
+        # Buttons
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        button_box.accepted.connect(save_dialog.accept)
+        button_box.rejected.connect(save_dialog.reject)
+        layout.addWidget(button_box)
+        
+        # Show dialog
+        if save_dialog.exec():
+            seq_name = name_input.text().strip()
+            description = description_input.toPlainText().strip()
+            
+            if not seq_name:
+                self.show_error("Save Failed", "Sequence name cannot be empty.")
+                return
+                
             self.log_message(f"Saving sequence as '{seq_name}'...")
-            # Optional: Add description input?
-            description = ""
             success, message = self.sequencer.save_sequence_to_supabase(seq_name, description)
             if success:
                 self.log_message(message)
-                # Update sequence name input field?
+                # Update sequence name input field
                 self.sequence_name_input.setText(seq_name)
                 QMessageBox.information(self, "Save Successful", message)
             else:
                 self.log_message(f"Save failed: {message}")
                 self.show_error("Save Failed", message)
-        elif ok: # Name was empty
-             self.show_error("Save Failed", "Sequence name cannot be empty.")
         else:
-             self.log_message("Save cancelled by user.")
+            self.log_message("Save cancelled by user.")
 
     def load_sequence(self):
         if not self.sequencer or not self.device or not self.device.is_open:
@@ -867,16 +954,25 @@ class MainWindow(QMainWindow):
 
                     # Update UI list based on the loaded sequence (already in self.sequencer.sequence)
                     self.update_sequence_list()
-                    # Update sequence name field using the name now stored in sequencer
+                    # Update sequence name and description fields 
                     if self.sequencer.current_sequence_name:
                         self.sequence_name_input.setText(self.sequencer.current_sequence_name)
                     else: # Fallback if name wasn't stored somehow
-                        for name, sid in saved_sequences:
+                        for name, sid, _ in saved_sequences:
                              if sid == sequence_id:
                                   self.sequence_name_input.setText(name)
                                   break
+                                  
+                    # Display sequence description if available
+                    if self.sequencer.current_sequence_description:
+                        description_msg = f"Sequence Description: {self.sequencer.current_sequence_description}"
+                        self.log_message(description_msg)
+                        self.sequence_description_display.setText(self.sequencer.current_sequence_description)
+                    else:
+                        self.sequence_description_display.clear()
                 else:
                     self.show_error("Load Failed", "Could not load sequence details from Supabase.")
+                    self.sequence_description_display.clear()
             else:
                  self.log_message("No sequence selected.")
         else:
@@ -1098,16 +1194,7 @@ class MainWindow(QMainWindow):
                 self.user_profile = {}
         
         self._update_auth_ui()
-        
-        # Optionally fetch and load additional user data
-        self._load_operator_names()
-        
-        # Set the logged-in user as the current operator
-        if user_email and user_email != 'Unknown':
-            index = self.operator_name_combo.findText(user_email)
-            if index >= 0:
-                self.operator_name_combo.setCurrentIndex(index)
-    
+
     def logout_user(self):
         """Sign out the current user"""
         if not self.supabase_client:
@@ -1150,15 +1237,21 @@ class MainWindow(QMainWindow):
                 if first_name or last_name:
                     display_name = f"{first_name} {last_name}".strip()
                     self.user_label.setText(f"Logged in as: {display_name}")
+                    self.operator_name_label.setText(f"Operator: {display_name}")
                 else:
                     self.user_label.setText(f"Logged in as: {email}")
+                    self.operator_name_label.setText(f"Operator: {email}")
             else:
                 self.user_label.setText(f"Logged in as: {email}")
+                self.operator_name_label.setText(f"Operator: {email}")
                 
             self.user_label.setStyleSheet("color: green")
+            self.operator_name_label.setStyleSheet("color: green")
         else:
             self.user_label.setText("Not logged in")
             self.user_label.setStyleSheet("color: gray")
+            self.operator_name_label.setText("Operator: Not logged in")
+            self.operator_name_label.setStyleSheet("color: gray")
             
         # You may also want to enable/disable other features based on login state
         # For example, saving sequences might require login

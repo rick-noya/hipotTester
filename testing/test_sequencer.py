@@ -11,12 +11,14 @@ class TestSequencer:
     """Manages building and running test sequences on the V7x device."""
 
     def __init__(self, device: V7xDevice):
+        """Initialize the test sequencer for the given device."""
         if not isinstance(device, V7xDevice):
             raise TypeError("TestSequencer requires a V7xDevice instance.")
         self.device = device
         self.sequence = [] # List to store configured steps (e.g., dictionaries)
         self.current_sequence_id = None # ID of the currently loaded/saved sequence
         self.current_sequence_name = None # Name of the currently loaded/saved sequence
+        self.current_sequence_description = None # Description of the currently loaded/saved sequence
         self.debug = device.debug # Inherit debug state from device
         self.supabase_client = get_supabase_client()
 
@@ -52,6 +54,7 @@ class TestSequencer:
         self.sequence = [] # Also clear internal sequence representation
         self.current_sequence_id = None # Reset current sequence info
         self.current_sequence_name = None
+        self.current_sequence_description = None
         return True
 
     def add_step_to_device(self, step_config):
@@ -289,6 +292,7 @@ class TestSequencer:
             # ----> Store the ID and Name <----
             self.current_sequence_id = res_sequence.data[0]['id']
             self.current_sequence_name = sequence_name
+            self.current_sequence_description = description
             print(f"Sequence header saved with ID: {self.current_sequence_id}")
 
             # 2. Prepare and insert steps into test_steps table
@@ -322,6 +326,7 @@ class TestSequencer:
                     # Clear stored ID/Name on failure
                     self.current_sequence_id = None
                     self.current_sequence_name = None
+                    self.current_sequence_description = None
                     return False, error_msg
 
             print(f"Successfully saved {len(steps_to_insert)} steps for sequence '{sequence_name}'.")
@@ -333,6 +338,7 @@ class TestSequencer:
             # Attempt rollback if sequence_id was obtained?
             self.current_sequence_id = None # Clear on exception
             self.current_sequence_name = None
+            self.current_sequence_description = None
             return False, error_msg
 
     def list_saved_sequences(self):
@@ -342,12 +348,12 @@ class TestSequencer:
             return []
         try:
             res = self.supabase_client.table("test_sequences") \
-                                      .select("id, sequence_name") \
+                                      .select("id, sequence_name, description") \
                                       .order("sequence_name") \
                                       .execute()
             if res.data:
-                # Return list of tuples (name, id) or just names?
-                return [(item['sequence_name'], item['id']) for item in res.data]
+                # Return list of tuples (name, id, description)
+                return [(item['sequence_name'], item['id'], item.get('description', '')) for item in res.data]
             else:
                 print(f"Could not list sequences: {res.error}")
                 return []
@@ -368,7 +374,7 @@ class TestSequencer:
         try:
             # 1. Get sequence header info (optional, maybe just name?)
             res_seq = self.supabase_client.table("test_sequences") \
-                                          .select("sequence_name") \
+                                          .select("sequence_name, description") \
                                           .eq("id", sequence_id) \
                                           .maybe_single() \
                                           .execute()
@@ -378,8 +384,10 @@ class TestSequencer:
                  self.sequence = []
                  self.current_sequence_id = None
                  self.current_sequence_name = None
+                 self.current_sequence_description = None
                  return None
             sequence_name = res_seq.data.get('sequence_name', 'Unknown')
+            sequence_description = res_seq.data.get('description', '')
             print(f"Found sequence: '{sequence_name}'")
 
             # 2. Get all steps for this sequence, ordered by step_number
@@ -427,6 +435,7 @@ class TestSequencer:
             # ----> Store the loaded ID and Name <----
             self.current_sequence_id = sequence_id
             self.current_sequence_name = sequence_name
+            self.current_sequence_description = sequence_description
             print(f"Sequence '{sequence_name}' loaded successfully with {len(self.sequence)} steps.")
             return self.sequence # Return the loaded sequence list
 
@@ -436,4 +445,5 @@ class TestSequencer:
             self.sequence = []
             self.current_sequence_id = None
             self.current_sequence_name = None
+            self.current_sequence_description = None
             return None 
