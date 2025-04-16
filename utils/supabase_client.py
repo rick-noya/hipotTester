@@ -1,14 +1,34 @@
 import os
 import json
 from supabase import create_client, Client
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 from pathlib import Path
+import logging
 
-# Load environment variables from .env file
-load_dotenv()
+# Set up a logger for this module
+logger = logging.getLogger('hipot.supabase')
+logger.setLevel(logging.DEBUG)
+if not logger.hasHandlers():
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+    logger.addHandler(handler)
+
+# Try to find and load the .env file
+found_env = find_dotenv()
+if found_env:
+    load_dotenv(found_env)
+    logger.info(f"Loaded .env file from: {found_env}")
+else:
+    logger.warning("No .env file found. Searched default locations.")
 
 url: str = os.environ.get("SUPABASE_URL")
 key: str = os.environ.get("SUPABASE_KEY")
+
+# Masked values for logging
+masked_url = url[:8] + "..." if url else None
+masked_key = (key[:4] + "..." + key[-4:]) if key and len(key) > 8 else None
+logger.info(f"SUPABASE_URL: {masked_url}")
+logger.info(f"SUPABASE_KEY: {masked_key}")
 
 supabase: Client = None
 
@@ -22,18 +42,24 @@ def get_supabase_client():
         return supabase
 
     if not url or not key:
+        logger.error("SUPABASE_URL and/or SUPABASE_KEY environment variables not set. Supabase logging disabled.")
+        logger.error(f"Current working directory: {os.getcwd()}")
+        logger.error(f".env file found: {found_env}")
+        logger.error(f"SUPABASE_URL: {masked_url}")
+        logger.error(f"SUPABASE_KEY: {masked_key}")
         print("Warning: SUPABASE_URL and SUPABASE_KEY environment variables not set. Supabase logging disabled.")
         return None
 
     try:
         supabase = create_client(url, key)
-        print("Supabase client initialized successfully.")
+        logger.info("Supabase client initialized successfully.")
         
         # Try to restore session if available
         restore_session()
         
         return supabase
     except Exception as e:
+        logger.error(f"Error initializing Supabase client: {e}")
         print(f"Error initializing Supabase client: {e}")
         return None
 
