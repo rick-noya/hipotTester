@@ -1276,8 +1276,18 @@ class MainWindow(QMainWindow):
     def handle_login_success(self, user_data):
         """Handle successful login"""
         self.current_user = user_data
-        # Access user email as an attribute instead of dictionary lookup
-        user_email = getattr(self.current_user, 'email', 'Unknown')
+        # Debug: log the type and content of user_data
+        if hasattr(self, 'logger'):
+            self.logger.debug(f"handle_login_success received user_data: {repr(user_data)}, type: {type(user_data)}")
+        # Robustly extract user email
+        user_email = getattr(self.current_user, 'email', None)
+        if not user_email and hasattr(self.current_user, 'user_metadata'):
+            # Try to get from user_metadata dict
+            user_email = self.current_user.user_metadata.get('email')
+        if not user_email and isinstance(self.current_user, dict):
+            user_email = self.current_user.get('email')
+        if not user_email:
+            user_email = str(self.current_user)
         self.log_message(f"Logged in as {user_email}")
         
         # Save the session for future use
@@ -1293,6 +1303,8 @@ class MainWindow(QMainWindow):
             try:
                 # Access user ID as an attribute
                 user_id = getattr(self.current_user, 'id', None)
+                if not user_id and isinstance(self.current_user, dict):
+                    user_id = self.current_user.get('id')
                 if user_id:
                     response = self.supabase_client.table("profiles") \
                         .select("first_name, last_name, phone_number") \
